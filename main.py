@@ -8,6 +8,8 @@ from discord.ext import commands, tasks
 # ── Configuration ──────────────────────────────────────────────
 TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 PREFIX_TAG = "[SOLVED] "
+TARGET_COMPLETION_CHANNEL_ID = 1534274534868258867
+CHECKMARK_EMOJIS = {"✅", "✔", "☑"}
 
 # ── Modpack update watcher config ──────────────────────────────
 MODRINTH_PROJECT_SLUG = "assembly-line-smp"
@@ -19,6 +21,7 @@ USER_AGENT = "Pavle012/assembly-line-smp-discord-bot (contact: via GitHub)"
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -115,6 +118,49 @@ async def check_modpack_updates():
 @check_modpack_updates.before_loop
 async def before_check_modpack_updates():
     await bot.wait_until_ready()
+
+
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    if payload.user_id == bot.user.id:
+        return
+
+    if payload.emoji.name not in CHECKMARK_EMOJIS:
+        return
+
+    channel = bot.get_channel(payload.channel_id)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(payload.channel_id)
+        except discord.HTTPException:
+            return
+
+    if isinstance(channel, discord.Thread):
+        is_target_channel = channel.id == TARGET_COMPLETION_CHANNEL_ID
+        is_target_forum = getattr(channel.parent, "id", None) == TARGET_COMPLETION_CHANNEL_ID
+        if not (is_target_channel or is_target_forum):
+            return
+    else:
+        if channel.id != TARGET_COMPLETION_CHANNEL_ID:
+            return
+
+    if not isinstance(channel, discord.Thread):
+        return
+
+    new_name = channel.name
+    if not new_name.startswith(PREFIX_TAG):
+        new_name = f"{PREFIX_TAG}{new_name}"
+        new_name = new_name[:100]
+
+    try:
+        await channel.edit(name=new_name)
+    except discord.Forbidden:
+        return
+
+    try:
+        await channel.edit(locked=True, archived=True)
+    except discord.Forbidden:
+        pass
 
 
 @bot.tree.command(name="completed", description="Mark this forum post as completed")
