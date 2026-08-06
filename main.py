@@ -28,7 +28,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})") # pyright: ignore[reportOptionalMemberAccess]
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s)")
@@ -111,7 +111,7 @@ async def check_modpack_updates():
         print(f"Could not find channel with ID {MODPACK_UPDATE_CHANNEL_ID}")
         return
 
-    await channel.send(embed=build_update_embed(latest))
+    await channel.send(embed=build_update_embed(latest)) # pyright: ignore[reportAttributeAccessIssue]
     save_last_version_id(latest_id)
 
 
@@ -122,7 +122,7 @@ async def before_check_modpack_updates():
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    if payload.user_id == bot.user.id:
+    if payload.user_id == bot.user.id: # pyright: ignore[reportOptionalMemberAccess]
         return
 
     if payload.emoji.name not in CHECKMARK_EMOJIS:
