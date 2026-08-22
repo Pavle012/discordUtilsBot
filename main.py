@@ -17,6 +17,7 @@ MODRINTH_API_URL = f"https://api.modrinth.com/v2/project/{MODRINTH_PROJECT_SLUG}
 MODPACK_UPDATE_CHANNEL_ID = int(os.environ["MODPACK_UPDATE_CHANNEL_ID"])
 CHECK_INTERVAL_MINUTES = 20
 LAST_VERSION_FILE = "last_modpack_version.json"
+EXPLANATIONS_FILE = "explanations.json"
 USER_AGENT = "Pavle012/assembly-line-smp-discord-bot (contact: via GitHub)"
 
 intents = discord.Intents.default()
@@ -120,6 +121,7 @@ async def before_check_modpack_updates():
     await bot.wait_until_ready()
 
 
+# ── Forum post completion via reaction ─────────────────────────
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == bot.user.id: # pyright: ignore[reportOptionalMemberAccess]
@@ -163,6 +165,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         pass
 
 
+# ── Forum post completion command ──────────────────────────────
 @bot.tree.command(name="completed", description="Mark this forum post as completed")
 async def completed(interaction: discord.Interaction):
     channel = interaction.channel
@@ -223,6 +226,61 @@ async def completed(interaction: discord.Interaction):
             "Note: I couldn't lock/archive the thread due to missing permissions.",
             ephemeral=True
         )
+
+
+# ── Explanation commands ───────────────────────────────────────
+def load_explanations() -> dict[str, str]:
+    if not os.path.exists(EXPLANATIONS_FILE):
+        return {}
+    try:
+        with open(EXPLANATIONS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+async def explanation_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    data = load_explanations()
+    return [
+        app_commands.Choice(name=key, value=key)
+        for key in data.keys()
+        if current.lower() in key.lower()
+    ][:25]
+
+
+@bot.tree.command(name="explain", description="Explain a specific topic")
+@app_commands.autocomplete(topic=explanation_autocomplete)
+async def explain(interaction: discord.Interaction, topic: str):
+    data = load_explanations()
+    topic_clean = topic.lower().strip()
+
+    if topic_clean not in data:
+        await interaction.response.send_message(
+            f"No explanation found for `{topic}`. Use `/explain-help` to see available topics.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(data[topic_clean])
+
+
+@bot.tree.command(name="explain-help", description="List all available explanation topics")
+async def explain_help(interaction: discord.Interaction):
+    data = load_explanations()
+    if not data:
+        await interaction.response.send_message("No explanation topics configured.", ephemeral=True)
+        return
+
+    topics_list = "\n".join([f"• `{key}`" for key in data.keys()])
+    embed = discord.Embed(
+        title="📚 Available Explanation Topics",
+        description=f"Use `/explain <topic>` with any of the following:\n\n{topics_list}",
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 bot.run(TOKEN)
