@@ -283,7 +283,7 @@ async def explain_help(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="Gleniro_work", description="Joke command")
+@bot.tree.command(name="gleniro_work", description="Joke command")
 async def gleniro_work(interaction: discord.Interaction):
     await interaction.response.send_message(
         "An internal expection occured: Gleniro is too lazy to work. Try again later."
