@@ -290,4 +290,18 @@ async def gleniro_work(interaction: discord.Interaction):
     )
 
 
+@bot.tree.command(name="members", description="Show the number of members in this server")
+async def members(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "This command can only be used in a server.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        f"This server has **{interaction.guild.member_count:,}** members."
+    )
+
+
 bot.run(TOKEN)
