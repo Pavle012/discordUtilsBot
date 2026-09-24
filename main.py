@@ -9,6 +9,7 @@ from discord.ext import commands, tasks
 TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 PREFIX_TAG = "[SOLVED] "
 TARGET_COMPLETION_CHANNEL_ID = 1534274534868258867
+ADMIN_ROLE_ID = 1492838235209076846
 CHECKMARK_EMOJIS = {"✅", "✔", "☑"}
 
 # ── Modpack update watcher config ──────────────────────────────
@@ -22,6 +23,8 @@ USER_AGENT = "Pavle012/assembly-line-smp-discord-bot (contact: via GitHub)"
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
+intents.presences = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -226,6 +229,66 @@ async def completed(interaction: discord.Interaction):
             "Note: I couldn't lock/archive the thread due to missing permissions.",
             ephemeral=True
         )
+
+
+# ── Admin status command ──────────────────────────────────────
+def get_admin_status(member: discord.Member) -> tuple[str, str]:
+    """Return a coloured status indicator and the human-readable status."""
+    if member.status == discord.Status.offline:
+        return "⚫", "Offline"
+
+    # A mobile online presence is shown separately from a normal online presence.
+    if member.status == discord.Status.online and member.mobile_status == discord.Status.online:
+        return "🟢", "Online mobile"
+
+    # Game activities take precedence in the display, while retaining the online colour.
+    if any(isinstance(activity, discord.Game) for activity in member.activities):
+        return "🟢", "Playing a game"
+
+    if member.status == discord.Status.dnd:
+        return "🔴", "Do not disturb"
+    if member.status == discord.Status.idle:
+        return "🟡", "Idle"
+    return "🟢", "Online"
+
+
+@bot.tree.command(name="admins", description="Show the availability of the server admins")
+async def admins(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "This command can only be used in a server.",
+            ephemeral=True
+        )
+        return
+
+    role = interaction.guild.get_role(ADMIN_ROLE_ID)
+    if role is None:
+        await interaction.response.send_message(
+            "I couldn't find the configured Admins role.",
+            ephemeral=True
+        )
+        return
+
+    members = sorted(role.members, key=lambda member: member.display_name.lower())
+    if not members:
+        member_lines = "No members have the Admins role."
+    else:
+        member_lines = "\n".join(
+            f"{indicator} **{member.display_name}** — {status}"
+            for member in members
+            for indicator, status in [get_admin_status(member)]
+        )
+
+    embed = discord.Embed(
+        title="🛡️ Admin availability",
+        description=member_lines,
+        color=discord.Color.blurple(),
+    )
+    await interaction.response.send_message(
+        content="feel free to ping @Admins",
+        embed=embed,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 # ── Explanation commands ───────────────────────────────────────
