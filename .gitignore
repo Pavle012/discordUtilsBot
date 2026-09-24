@@ -2,3 +2,4 @@ start.sh
 .venv/*
 last_modpack_version.json
 __pycache__/*
+explanations.json
