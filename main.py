@@ -10,6 +10,7 @@ TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 PREFIX_TAG = "[SOLVED] "
 TARGET_COMPLETION_CHANNEL_ID = 1534274534868258867
 ADMIN_ROLE_ID = 1492838235209076846
+MODERATOR_ONLY_CHANNEL_ID = 1492865328261234841
 CHECKMARK_EMOJIS = {"✅", "✔", "☑"}
 
 # ── Modpack update watcher config ──────────────────────────────
@@ -28,6 +29,31 @@ intents.presences = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+def is_admin(interaction: discord.Interaction) -> bool:
+    return (
+        isinstance(interaction.user, discord.Member)
+        and interaction.user.guild_permissions.administrator
+    )
+
+
+async def require_admin(interaction: discord.Interaction) -> bool:
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "This command can only be used in a server.",
+            ephemeral=True,
+        )
+        return False
+
+    if not is_admin(interaction):
+        await interaction.response.send_message(
+            "Only server administrators can use this command.",
+            ephemeral=True,
+        )
+        return False
+
+    return True
 
 
 @bot.event
@@ -297,9 +323,16 @@ def load_explanations() -> dict[str, str]:
         return {}
     try:
         with open(EXPLANATIONS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def save_explanations(data: dict[str, str]) -> None:
+    with open(EXPLANATIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")
 
 
 async def explanation_autocomplete(
@@ -312,6 +345,57 @@ async def explanation_autocomplete(
         for key in data.keys()
         if current.lower() in key.lower()
     ][:25]
+
+
+@bot.tree.command(name="explanation-add", description="Add or update an explanation topic (admins only)")
+@app_commands.describe(topic="The topic name", explanation="The explanation shown to users")
+async def explanation_add(interaction: discord.Interaction, topic: str, explanation: str):
+    if not await require_admin(interaction):
+        return
+
+    topic_clean = topic.lower().strip()
+    explanation_clean = explanation.strip()
+    if not topic_clean or not explanation_clean:
+        await interaction.response.send_message(
+            "The topic and explanation cannot be empty.",
+            ephemeral=True,
+        )
+        return
+
+    data = load_explanations()
+    was_existing = topic_clean in data
+    data[topic_clean] = explanation_clean
+    save_explanations(data)
+
+    action = "updated" if was_existing else "added"
+    await interaction.response.send_message(
+        f"✅ Explanation topic `{topic_clean}` was {action}.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="explanation-remove", description="Remove an explanation topic (admins only)")
+@app_commands.describe(topic="The topic to remove")
+@app_commands.autocomplete(topic=explanation_autocomplete)
+async def explanation_remove(interaction: discord.Interaction, topic: str):
+    if not await require_admin(interaction):
+        return
+
+    topic_clean = topic.lower().strip()
+    data = load_explanations()
+    if topic_clean not in data:
+        await interaction.response.send_message(
+            f"No explanation found for `{topic_clean}`.",
+            ephemeral=True,
+        )
+        return
+
+    del data[topic_clean]
+    save_explanations(data)
+    await interaction.response.send_message(
+        f"✅ Explanation topic `{topic_clean}` was removed.",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="explain", description="Explain a specific topic")
@@ -344,6 +428,74 @@ async def explain_help(interaction: discord.Interaction):
         color=discord.Color.blue()
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ── Bug reports ────────────────────────────────────────────────
+@bot.tree.command(name="bug-report", description="Send a bug report to the server administrators")
+@app_commands.describe(description="Describe the bug and how to reproduce it")
+async def bug_report(interaction: discord.Interaction, description: str):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "This command can only be used in a server.",
+            ephemeral=True,
+        )
+        return
+
+    description = description.strip()
+    if not description:
+        await interaction.response.send_message(
+            "Please include a description of the bug.",
+            ephemeral=True,
+        )
+        return
+
+    channel = bot.get_channel(MODERATOR_ONLY_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(MODERATOR_ONLY_CHANNEL_ID)
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "I couldn't reach the moderator-only channel. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+        await interaction.response.send_message(
+            "The configured moderator-only channel is not a text channel.",
+            ephemeral=True,
+        )
+        return
+
+    report = discord.Embed(
+        title="🐛 New bug report",
+        description=description,
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow(),
+    )
+    report.add_field(name="Reported by", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
+    report.add_field(name="Server", value=f"{interaction.guild.name} (`{interaction.guild.id}`)", inline=False)
+    report.set_footer(text="Bug report")
+
+    try:
+        await channel.send(embed=report, allowed_mentions=discord.AllowedMentions.none())
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "I don't have permission to send reports to the moderator-only channel.",
+            ephemeral=True,
+        )
+        return
+    except discord.HTTPException:
+        await interaction.response.send_message(
+            "I couldn't send the bug report. Please try again later.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        "✅ Your bug report was sent to the server administrators.",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="gleniro_work", description="Joke command")
