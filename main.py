@@ -6,6 +6,7 @@ import discord
 import aiohttp
 from discord import app_commands
 from discord.ext import commands, tasks
+import dns.resolver
 
 # ── Configuration ──────────────────────────────────────────────
 TOKEN = os.environ["DISCORD_BOT_TOKEN"]
@@ -38,6 +39,15 @@ intents.presences = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+def try_srv(host: str, port: int) -> tuple[str, int]:
+    try:
+        answers = dns.resolver.resolve(f"_minecraft._tcp.{host}", "SRV")
+        for rdata in answers:
+            return str(rdata.target), rdata.port
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
+        pass
+    return host, port
 
 
 def load_server_state() -> dict:
@@ -94,6 +104,7 @@ def read_varint(sock: socket.socket) -> int:
 
 def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None]:
     try:
+        host, port = try_srv(host, port)
         with socket.create_connection((host, port), timeout=10) as sock:
             sock.settimeout(10)
             address = host.encode("utf-8")
