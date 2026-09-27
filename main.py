@@ -248,6 +248,18 @@ async def require_admin(interaction: discord.Interaction) -> bool:
     return True
 
 
+async def safe_defer_interaction(
+    interaction: discord.Interaction,
+    *,
+    ephemeral: bool = False,
+) -> None:
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=ephemeral)
+    except (discord.HTTPException, discord.NotFound, RuntimeError):
+        pass
+
+
 async def safe_send_interaction_message(
     interaction: discord.Interaction,
     message: str,
@@ -257,13 +269,21 @@ async def safe_send_interaction_message(
     allowed_mentions: discord.AllowedMentions | None = None,
 ) -> None:
     try:
-        await interaction.response.send_message(
-            message,
-            ephemeral=ephemeral,
-            embed=embed,
-            allowed_mentions=allowed_mentions,
-        )
-    except discord.NotFound:
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                message,
+                ephemeral=ephemeral,
+                embed=embed,
+                allowed_mentions=allowed_mentions,
+            )
+        else:
+            await interaction.response.send_message(
+                message,
+                ephemeral=ephemeral,
+                embed=embed,
+                allowed_mentions=allowed_mentions,
+            )
+    except (discord.HTTPException, discord.NotFound, RuntimeError):
         try:
             await interaction.followup.send(
                 message,
@@ -728,6 +748,8 @@ async def gleniro_work(interaction: discord.Interaction):
 
 @bot.tree.command(name="members", description="Show the number of members in this server")
 async def members(interaction: discord.Interaction):
+    await safe_defer_interaction(interaction)
+
     if interaction.guild is None:
         await safe_send_interaction_message(
             interaction,
@@ -744,8 +766,11 @@ async def members(interaction: discord.Interaction):
 
 @bot.tree.command(name="server-status", description="Check the current Minecraft server status and player count")
 async def server_status(interaction: discord.Interaction):
+    await safe_defer_interaction(interaction)
+
     if interaction.guild is None:
-        await interaction.response.send_message(
+        await safe_send_interaction_message(
+            interaction,
             "This command can only be used in a server.",
             ephemeral=True,
         )
@@ -762,7 +787,8 @@ async def server_status(interaction: discord.Interaction):
 
     status_label = "Maintenance" if maintenance_mode else ("Online" if online else "Offline")
     player_text = "Maintenance" if maintenance_mode else (str(players) if online and players is not None else "Offline")
-    await interaction.response.send_message(
+    await safe_send_interaction_message(
+        interaction,
         f"Status: **{status_label}**\nPlayers: **{player_text}**\nHost: `{PLAYIT_SERVER_HOST}:{PLAYIT_SERVER_PORT}`",
         allowed_mentions=discord.AllowedMentions.none(),
     )
@@ -777,6 +803,8 @@ async def server_status(interaction: discord.Interaction):
     ]
 )
 async def server_maintenance(interaction: discord.Interaction, enabled: str):
+    await safe_defer_interaction(interaction, ephemeral=True)
+
     if not await require_admin(interaction):
         return
 
@@ -787,7 +815,8 @@ async def server_maintenance(interaction: discord.Interaction, enabled: str):
     online = bool(state.get("online"))
     players = state.get("players", 0)
     await update_server_status_channels(online, players, state["maintenance"])
-    await interaction.response.send_message(
+    await safe_send_interaction_message(
+        interaction,
         f"✅ Maintenance mode is now **{'enabled' if state['maintenance'] else 'disabled'}**.",
         ephemeral=True,
     )
