@@ -142,11 +142,25 @@ async def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None,
     names = players.get("list") or []
     if not isinstance(names, list):
         names = []
-    names = [str(name) for name in names if isinstance(name, (str, int))]
-    return True, online_players, names
+
+    clean_names: list[str] = []
+    for entry in names:
+        if isinstance(entry, str):
+            clean_names.append(entry)
+        elif isinstance(entry, dict):
+            name = entry.get("name")
+            if isinstance(name, str):
+                clean_names.append(name)
+        elif isinstance(entry, (int, float)):
+            clean_names.append(str(entry))
+
+    return True, online_players, clean_names
 
 
 async def update_server_status_channels(status: str, players: int) -> None:
+    target_status_name = f"Status: {status}"
+    target_players_name = f"Players: {players}"
+
     status_channel = bot.get_channel(STATUS_VOICE_CHANNEL_ID)
     if status_channel is None:
         try:
@@ -161,10 +175,17 @@ async def update_server_status_channels(status: str, players: int) -> None:
         except discord.HTTPException:
             players_channel = None
 
-    if isinstance(status_channel, discord.VoiceChannel):
-        await status_channel.edit(name=f"Status: {status}")
-    if isinstance(players_channel, discord.VoiceChannel):
-        await players_channel.edit(name=f"Players: {players}")
+    if isinstance(status_channel, discord.VoiceChannel) and status_channel.name != target_status_name:
+        try:
+            await status_channel.edit(name=target_status_name)
+        except discord.Forbidden:
+            pass
+
+    if isinstance(players_channel, discord.VoiceChannel) and players_channel.name != target_players_name:
+        try:
+            await players_channel.edit(name=target_players_name)
+        except discord.Forbidden:
+            pass
 
 
 @tasks.loop(seconds=SERVER_STATUS_POLL_SECONDS)
@@ -759,8 +780,7 @@ async def server_status(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="members", description="Show the number of members in this server")
-async def members(interaction: discord.Interaction):
+async def show_member_count(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         await interaction.response.send_message(
             "This command can only be used in a server.",
@@ -773,6 +793,11 @@ async def members(interaction: discord.Interaction):
         f"This server has **{interaction.guild.member_count:,}** members.",
         allowed_mentions=discord.AllowedMentions.none(),
     )
+
+
+@bot.tree.command(name="members", description="Show the number of members in this server")
+async def members(interaction: discord.Interaction):
+    await show_member_count(interaction)
 
 
 @bot.tree.command(name="server-maintenance", description="Toggle maintenance mode for the Minecraft server status")
@@ -802,7 +827,7 @@ async def server_maintenance(interaction: discord.Interaction, enabled: str):
 
 @bot.tree.command(name="server-info", description="Alias for members: show the server member count")
 async def server_info(interaction: discord.Interaction):
-    await members(interaction)
+    await show_member_count(interaction)
 
 
 bot.run(TOKEN)
