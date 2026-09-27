@@ -1,7 +1,5 @@
 import os
 import json
-import struct
-import socket
 import discord
 import aiohttp
 from discord import app_commands
@@ -14,13 +12,6 @@ TARGET_COMPLETION_CHANNEL_ID = 1534274534868258867
 ADMIN_ROLE_ID = 1492838235209076846
 MODERATOR_ONLY_CHANNEL_ID = 1492865328261234841
 CHECKMARK_EMOJIS = {"✅", "✔", "☑"}
-
-PLAYIT_SERVER_HOST = os.environ.get("PLAYIT_SERVER_HOST", "kubabin.dev")
-PLAYIT_SERVER_PORT = int(os.environ.get("PLAYIT_SERVER_PORT", "25565"))
-SERVER_STATUS_CHANNEL_ID = int(os.environ.get("SERVER_STATUS_CHANNEL_ID", "1526969043783909548"))
-SERVER_PLAYERS_CHANNEL_ID = int(os.environ.get("SERVER_PLAYERS_CHANNEL_ID", "1526969052491157626"))
-SERVER_STATUS_CHECK_INTERVAL_MINUTES = int(os.environ.get("SERVER_STATUS_CHECK_INTERVAL_MINUTES", "5"))
-SERVER_STATUS_FILE = "server_status.json"
 
 # ── Modpack update watcher config ──────────────────────────────
 MODRINTH_PROJECT_SLUG = "assembly-line-smp"
@@ -38,189 +29,6 @@ intents.presences = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-def load_server_state() -> dict:
-    if not os.path.exists(SERVER_STATUS_FILE):
-        return {"online": None, "players": 0, "maintenance": False}
-    try:
-        with open(SERVER_STATUS_FILE, "r", encoding="utf-8") as file:
-            data = json.load(file)
-            if isinstance(data, dict):
-                return {
-                    "online": data.get("online"),
-                    "players": int(data.get("players", 0) or 0),
-                    "maintenance": bool(data.get("maintenance", False)),
-                }
-    except (json.JSONDecodeError, OSError, TypeError, ValueError):
-        pass
-    return {"online": None, "players": 0, "maintenance": False}
-
-
-def save_server_state(state: dict) -> None:
-    with open(SERVER_STATUS_FILE, "w", encoding="utf-8") as file:
-        json.dump(state, file, indent=2)
-        file.write("\n")
-
-
-def pack_varint(value: int) -> bytes:
-    data = bytearray()
-    while True:
-        temp = value & 0x7F
-        value >>= 7
-        if value != 0:
-            data.append(temp | 0x80)
-        else:
-            data.append(temp)
-            break
-    return bytes(data)
-
-
-def read_varint(sock: socket.socket) -> int:
-    value = 0
-    position = 0
-    while True:
-        chunk = sock.recv(1)
-        if not chunk:
-            raise OSError("Connection closed while reading VarInt")
-        byte = chunk[0]
-        value |= (byte & 0x7F) << position
-        if (byte & 0x80) == 0:
-            return value
-        position += 7
-        if position > 35:
-            raise ValueError("VarInt is too large")
-
-
-def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None]:
-    try:
-        with socket.create_connection((host, port), timeout=10) as sock:
-            sock.settimeout(10)
-            address = host.encode("utf-8")
-            handshake = b""
-            handshake += pack_varint(0)
-            handshake += pack_varint(47)
-            handshake += pack_varint(len(address)) + address
-            handshake += struct.pack(">H", port)
-            handshake += pack_varint(1)
-            sock.sendall(pack_varint(len(handshake)) + handshake)
-            sock.sendall(pack_varint(1) + b"\x00")
-
-            packet_length = read_varint(sock)
-            packet_id = read_varint(sock)
-            if packet_id != 0:
-                return False, 0
-
-            json_length = read_varint(sock)
-            payload = sock.recv(json_length)
-            if len(payload) != json_length:
-                return False, 0
-            data = json.loads(payload.decode("utf-8"))
-            player_count = int(data.get("players", {}).get("online", 0) or 0)
-            return True, player_count
-    except (OSError, ValueError, json.JSONDecodeError, socket.timeout):
-        return False, 0
-
-
-async def ensure_channel_name(channel_id: int, new_name: str) -> None:
-    channel = bot.get_channel(channel_id)
-    if channel is None:
-        try:
-            channel = await bot.fetch_channel(channel_id)
-        except (discord.HTTPException, discord.Forbidden):
-            return
-
-    if isinstance(channel, discord.abc.GuildChannel):
-        try:
-            await channel.edit(name=new_name)
-        except discord.Forbidden:
-            return
-
-
-async def update_server_status_channels(is_online: bool, players_online: int | None, maintenance_mode: bool) -> None:
-    if maintenance_mode:
-        status_name = "Status: Maintenance"
-        players_name = "Players: Maintenance"
-    elif is_online:
-        status_name = "Status: Online"
-        players_name = f"Players: {players_online if players_online is not None else 0}"
-    else:
-        status_name = "Status: Offline"
-        players_name = "Players: Offline"
-
-    await ensure_channel_name(SERVER_STATUS_CHANNEL_ID, status_name)
-    await ensure_channel_name(SERVER_PLAYERS_CHANNEL_ID, players_name)
-
-
-async def notify_admins_server_status(is_online: bool, players_online: int | None, maintenance_mode: bool) -> None:
-    if is_online:
-        title = "Server back online"
-        description = "The Minecraft server is back online."
-        color = discord.Color.green()
-    else:
-        title = "Minecraft server offline"
-        description = "The Minecraft server is currently offline and may need attention."
-        color = discord.Color.red()
-
-    if maintenance_mode:
-        description = f"{description} Maintenance mode is currently enabled."
-
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=color,
-        timestamp=discord.utils.utcnow(),
-    )
-    if players_online is not None:
-        embed.add_field(name="Players online", value=str(players_online), inline=True)
-    embed.add_field(name="Status", value="Maintenance" if maintenance_mode else ("Online" if is_online else "Offline"), inline=True)
-
-    channel = bot.get_channel(MODERATOR_ONLY_CHANNEL_ID)
-    if channel is None:
-        try:
-            channel = await bot.fetch_channel(MODERATOR_ONLY_CHANNEL_ID)
-        except discord.HTTPException:
-            return
-
-    if isinstance(channel, (discord.TextChannel, discord.Thread)):
-        await channel.send(
-            f"<@&{ADMIN_ROLE_ID}>",
-            embed=embed,
-            allowed_mentions=discord.AllowedMentions.all(),
-        )
-
-
-@tasks.loop(minutes=SERVER_STATUS_CHECK_INTERVAL_MINUTES)
-async def check_server_status():
-    state = load_server_state()
-    maintenance_mode = bool(state.get("maintenance", False))
-    is_online, players_online = ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
-
-    await update_server_status_channels(is_online, players_online, maintenance_mode)
-
-    previous_online = state.get("online")
-    if previous_online is None:
-        state["online"] = is_online
-        state["players"] = players_online or 0
-        state["maintenance"] = maintenance_mode
-        save_server_state(state)
-        return
-
-    if previous_online != is_online:
-        if not is_online:
-            await notify_admins_server_status(False, players_online, maintenance_mode)
-        elif previous_online is False:
-            await notify_admins_server_status(True, players_online, maintenance_mode)
-
-    state["online"] = is_online
-    state["players"] = players_online or 0
-    state["maintenance"] = maintenance_mode
-    save_server_state(state)
-
-
-@check_server_status.before_loop
-async def before_check_server_status():
-    await bot.wait_until_ready()
 
 
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -248,53 +56,6 @@ async def require_admin(interaction: discord.Interaction) -> bool:
     return True
 
 
-async def safe_defer_interaction(
-    interaction: discord.Interaction,
-    *,
-    ephemeral: bool = False,
-) -> None:
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=ephemeral)
-    except (discord.HTTPException, discord.NotFound, RuntimeError):
-        pass
-
-
-async def safe_send_interaction_message(
-    interaction: discord.Interaction,
-    message: str,
-    *,
-    ephemeral: bool = False,
-    embed: discord.Embed | None = None,
-    allowed_mentions: discord.AllowedMentions | None = None,
-) -> None:
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(
-                message,
-                ephemeral=ephemeral,
-                embed=embed,
-                allowed_mentions=allowed_mentions,
-            )
-        else:
-            await interaction.response.send_message(
-                message,
-                ephemeral=ephemeral,
-                embed=embed,
-                allowed_mentions=allowed_mentions,
-            )
-    except (discord.HTTPException, discord.NotFound, RuntimeError):
-        try:
-            await interaction.followup.send(
-                message,
-                ephemeral=ephemeral,
-                embed=embed,
-                allowed_mentions=allowed_mentions,
-            )
-        except Exception:
-            pass
-
-
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})") # pyright: ignore[reportOptionalMemberAccess]
@@ -306,8 +67,6 @@ async def on_ready():
 
     if not check_modpack_updates.is_running():
         check_modpack_updates.start()
-    if not check_server_status.is_running():
-        check_server_status.start()
 
 
 # ── Modpack update watcher ─────────────────────────────────────
@@ -748,77 +507,15 @@ async def gleniro_work(interaction: discord.Interaction):
 
 @bot.tree.command(name="members", description="Show the number of members in this server")
 async def members(interaction: discord.Interaction):
-    await safe_defer_interaction(interaction)
-
     if interaction.guild is None:
-        await safe_send_interaction_message(
-            interaction,
+        await interaction.response.send_message(
             "This command can only be used in a server.",
-            ephemeral=True,
+            ephemeral=True
         )
         return
 
-    await safe_send_interaction_message(
-        interaction,
-        f"This server has **{interaction.guild.member_count:,}** members.",
-    )
-
-
-@bot.tree.command(name="server-status", description="Check the current Minecraft server status and player count")
-async def server_status(interaction: discord.Interaction):
-    await safe_defer_interaction(interaction)
-
-    if interaction.guild is None:
-        await safe_send_interaction_message(
-            interaction,
-            "This command can only be used in a server.",
-            ephemeral=True,
-        )
-        return
-
-    state = load_server_state()
-    online, players = ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
-    maintenance_mode = bool(state.get("maintenance", False))
-    await update_server_status_channels(online, players, maintenance_mode)
-    state["online"] = online
-    state["players"] = players or 0
-    state["maintenance"] = maintenance_mode
-    save_server_state(state)
-
-    status_label = "Maintenance" if maintenance_mode else ("Online" if online else "Offline")
-    player_text = "Maintenance" if maintenance_mode else (str(players) if online and players is not None else "Offline")
-    await safe_send_interaction_message(
-        interaction,
-        f"Status: **{status_label}**\nPlayers: **{player_text}**\nHost: `{PLAYIT_SERVER_HOST}:{PLAYIT_SERVER_PORT}`",
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
-
-
-@bot.tree.command(name="server-maintenance", description="Toggle maintenance mode for the Minecraft server status")
-@app_commands.describe(enabled="Turn maintenance mode on or off")
-@app_commands.choices(
-    enabled=[
-        app_commands.Choice(name="On", value="on"),
-        app_commands.Choice(name="Off", value="off"),
-    ]
-)
-async def server_maintenance(interaction: discord.Interaction, enabled: str):
-    await safe_defer_interaction(interaction, ephemeral=True)
-
-    if not await require_admin(interaction):
-        return
-
-    state = load_server_state()
-    state["maintenance"] = enabled == "on"
-    save_server_state(state)
-
-    online = bool(state.get("online"))
-    players = state.get("players", 0)
-    await update_server_status_channels(online, players, state["maintenance"])
-    await safe_send_interaction_message(
-        interaction,
-        f"✅ Maintenance mode is now **{'enabled' if state['maintenance'] else 'disabled'}**.",
-        ephemeral=True,
+    await interaction.response.send_message(
+        f"This server has **{interaction.guild.member_count:,}** members."
     )
 
 
