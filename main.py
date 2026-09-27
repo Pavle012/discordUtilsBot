@@ -235,8 +235,11 @@ async def safe_send_interaction_message(
 
     try:
         await interaction.response.send_message(**kwargs)
-    except discord.InteractionResponded:
-        await interaction.followup.send(**kwargs)
+    except (discord.InteractionResponded, discord.NotFound):
+        try:
+            await interaction.followup.send(**kwargs)
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
 
 @bot.event
@@ -688,14 +691,16 @@ async def gleniro_work(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="members", description="Show the number of members in this server")
-async def members(interaction: discord.Interaction):
+@bot.tree.command(name="server-status", description="Show the Minecraft server status")
+async def server_status(interaction: discord.Interaction):
     if interaction.guild is None:
         await interaction.response.send_message(
             "This command can only be used in a server.",
             ephemeral=True,
         )
         return
+
+    await interaction.response.defer()
 
     state = load_server_state()
     online, players = ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
@@ -707,9 +712,24 @@ async def members(interaction: discord.Interaction):
 
     status_label = "Maintenance" if maintenance_mode else ("Online" if online else "Offline")
     player_text = "Maintenance" if maintenance_mode else (str(players) if online and players is not None else "Offline")
-    await safe_send_interaction_message(
-        interaction,
+    await interaction.followup.send(
         f"Status: **{status_label}**\nPlayers: **{player_text}**\nHost: `{PLAYIT_SERVER_HOST}:{PLAYIT_SERVER_PORT}`",
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+@bot.tree.command(name="members", description="Show the number of members in this server")
+async def members(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "This command can only be used in a server.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer()
+    await interaction.followup.send(
+        f"This server has **{interaction.guild.member_count:,}** members.",
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
@@ -739,18 +759,9 @@ async def server_maintenance(interaction: discord.Interaction, enabled: str):
     )
 
 
-@bot.tree.command(name="server-info", description="Show the server member count")
+@bot.tree.command(name="server-info", description="Alias for members: show the server member count")
 async def server_info(interaction: discord.Interaction):
-    if interaction.guild is None:
-        await interaction.response.send_message(
-            "This command can only be used in a server.",
-            ephemeral=True,
-        )
-        return
-
-    await interaction.response.send_message(
-        f"This server has **{interaction.guild.member_count:,}** members."
-    )
+    await members(interaction)
 
 
 bot.run(TOKEN)
