@@ -248,6 +248,33 @@ async def require_admin(interaction: discord.Interaction) -> bool:
     return True
 
 
+async def safe_send_interaction_message(
+    interaction: discord.Interaction,
+    message: str,
+    *,
+    ephemeral: bool = False,
+    embed: discord.Embed | None = None,
+    allowed_mentions: discord.AllowedMentions | None = None,
+) -> None:
+    try:
+        await interaction.response.send_message(
+            message,
+            ephemeral=ephemeral,
+            embed=embed,
+            allowed_mentions=allowed_mentions,
+        )
+    except discord.NotFound:
+        try:
+            await interaction.followup.send(
+                message,
+                ephemeral=ephemeral,
+                embed=embed,
+                allowed_mentions=allowed_mentions,
+            )
+        except Exception:
+            pass
+
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})") # pyright: ignore[reportOptionalMemberAccess]
@@ -702,14 +729,16 @@ async def gleniro_work(interaction: discord.Interaction):
 @bot.tree.command(name="members", description="Show the number of members in this server")
 async def members(interaction: discord.Interaction):
     if interaction.guild is None:
-        await interaction.response.send_message(
+        await safe_send_interaction_message(
+            interaction,
             "This command can only be used in a server.",
-            ephemeral=True
+            ephemeral=True,
         )
         return
 
-    await interaction.response.send_message(
-        f"This server has **{interaction.guild.member_count:,}** members."
+    await safe_send_interaction_message(
+        interaction,
+        f"This server has **{interaction.guild.member_count:,}** members.",
     )
 
 
