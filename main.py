@@ -18,9 +18,6 @@ CHECKMARK_EMOJIS = {"✅", "✔", "☑"}
 
 PLAYIT_SERVER_HOST = os.environ.get("PLAYIT_SERVER_HOST", "kubabin.dev")
 PLAYIT_SERVER_PORT = int(os.environ.get("PLAYIT_SERVER_PORT", "25565"))
-SERVER_STATUS_CHANNEL_ID = int(os.environ.get("SERVER_STATUS_CHANNEL_ID", "1526969043783909548"))
-SERVER_PLAYERS_CHANNEL_ID = int(os.environ.get("SERVER_PLAYERS_CHANNEL_ID", "1526969052491157626"))
-SERVER_STATUS_CHECK_INTERVAL_MINUTES = int(os.environ.get("SERVER_STATUS_CHECK_INTERVAL_MINUTES", "5"))
 SERVER_STATUS_FILE = "server_status.json"
 
 # ── Modpack update watcher config ──────────────────────────────
@@ -133,36 +130,6 @@ def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None]:
         return False, 0
 
 
-async def ensure_channel_name(channel_id: int, new_name: str) -> None:
-    channel = bot.get_channel(channel_id)
-    if channel is None:
-        try:
-            channel = await bot.fetch_channel(channel_id)
-        except (discord.HTTPException, discord.Forbidden):
-            return
-
-    if isinstance(channel, discord.abc.GuildChannel):
-        try:
-            await channel.edit(name=new_name)
-        except discord.Forbidden:
-            return
-
-
-async def update_server_status_channels(is_online: bool, players_online: int | None, maintenance_mode: bool) -> None:
-    if maintenance_mode:
-        status_name = "Status: Maintenance"
-        players_name = "Players: Maintenance"
-    elif is_online:
-        status_name = "Status: Online"
-        players_name = f"Players: {players_online if players_online is not None else 0}"
-    else:
-        status_name = "Status: Offline"
-        players_name = "Players: Offline"
-
-    await ensure_channel_name(SERVER_STATUS_CHANNEL_ID, status_name)
-    await ensure_channel_name(SERVER_PLAYERS_CHANNEL_ID, players_name)
-
-
 async def notify_admins_server_status(is_online: bool, players_online: int | None, maintenance_mode: bool) -> None:
     if is_online:
         title = "Server back online"
@@ -199,39 +166,6 @@ async def notify_admins_server_status(is_online: bool, players_online: int | Non
             embed=embed,
             allowed_mentions=discord.AllowedMentions.all(),
         )
-
-
-@tasks.loop(minutes=SERVER_STATUS_CHECK_INTERVAL_MINUTES)
-async def check_server_status():
-    state = load_server_state()
-    maintenance_mode = bool(state.get("maintenance", False))
-    is_online, players_online = ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
-
-    await update_server_status_channels(is_online, players_online, maintenance_mode)
-
-    previous_online = state.get("online")
-    if previous_online is None:
-        state["online"] = is_online
-        state["players"] = players_online or 0
-        state["maintenance"] = maintenance_mode
-        save_server_state(state)
-        return
-
-    if previous_online != is_online:
-        if not is_online:
-            await notify_admins_server_status(False, players_online, maintenance_mode)
-        elif previous_online is False:
-            await notify_admins_server_status(True, players_online, maintenance_mode)
-
-    state["online"] = is_online
-    state["players"] = players_online or 0
-    state["maintenance"] = maintenance_mode
-    save_server_state(state)
-
-
-@check_server_status.before_loop
-async def before_check_server_status():
-    await bot.wait_until_ready()
 
 
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -317,8 +251,6 @@ async def on_ready():
 
     if not check_modpack_updates.is_running():
         check_modpack_updates.start()
-    if not check_server_status.is_running():
-        check_server_status.start()
 
 
 # ── Modpack update watcher ─────────────────────────────────────
@@ -790,7 +722,6 @@ async def server_status(interaction: discord.Interaction):
     state = load_server_state()
     online, players = ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
     maintenance_mode = bool(state.get("maintenance", False))
-    await update_server_status_channels(online, players, maintenance_mode)
     state["online"] = online
     state["players"] = players or 0
     state["maintenance"] = maintenance_mode
@@ -825,7 +756,6 @@ async def server_maintenance(interaction: discord.Interaction, enabled: str):
 
     online = bool(state.get("online"))
     players = state.get("players", 0)
-    await update_server_status_channels(online, players, state["maintenance"])
     await safe_send_interaction_message(
         interaction,
         f"✅ Maintenance mode is now **{'enabled' if state['maintenance'] else 'disabled'}**.",
