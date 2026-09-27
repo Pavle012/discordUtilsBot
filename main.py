@@ -2,6 +2,7 @@ import os
 import json
 import socket
 import struct
+import time
 
 import aiohttp
 import discord
@@ -27,6 +28,7 @@ SERVER_STATUS_TIMEOUT_SECONDS = 3
 SERVER_STATUS_POLL_SECONDS = 30
 STATUS_VOICE_CHANNEL_ID = 1526969043783909548
 PLAYER_COUNT_VOICE_CHANNEL_ID = 1526969052491157626
+STATUS_CHANNEL_RATE_LIMIT_SECONDS = 60
 SERVER_STATUS_FILE = "server_status.json"
 
 # ── Modpack update watcher config ──────────────────────────────
@@ -157,7 +159,16 @@ async def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None,
     return True, online_players, clean_names
 
 
+_last_status_channel_update = 0.0
+
+
 async def update_server_status_channels(status: str, players: int) -> None:
+    global _last_status_channel_update
+
+    now = time.monotonic()
+    if now - _last_status_channel_update < STATUS_CHANNEL_RATE_LIMIT_SECONDS:
+        return
+
     target_status_name = f"Status: {status}"
     target_players_name = f"Players: {players}"
 
@@ -175,17 +186,23 @@ async def update_server_status_channels(status: str, players: int) -> None:
         except discord.HTTPException:
             players_channel = None
 
+    did_update = False
     if isinstance(status_channel, discord.VoiceChannel) and status_channel.name != target_status_name:
         try:
             await status_channel.edit(name=target_status_name)
+            did_update = True
         except discord.Forbidden:
             pass
 
     if isinstance(players_channel, discord.VoiceChannel) and players_channel.name != target_players_name:
         try:
             await players_channel.edit(name=target_players_name)
+            did_update = True
         except discord.Forbidden:
             pass
+
+    if did_update:
+        _last_status_channel_update = now
 
 
 @tasks.loop(seconds=SERVER_STATUS_POLL_SECONDS)
@@ -760,7 +777,10 @@ async def server_status(interaction: discord.Interaction):
         )
         return
 
-    await interaction.response.defer()
+    try:
+        await interaction.response.defer()
+    except discord.InteractionResponded:
+        pass
 
     state = load_server_state()
     online, players, player_names = await ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
@@ -774,10 +794,14 @@ async def server_status(interaction: discord.Interaction):
     player_text = "Maintenance" if maintenance_mode else (str(players) if online and players is not None else "Offline")
     player_list = ", ".join(player_names) if player_names else "No players online"
     await update_server_status_channels(status_label, players or 0)
-    await interaction.followup.send(
-        f"Status: **{status_label}**\nPlayers: **{player_text}**\nPlayers online: {player_list}\nHost: `{PLAYIT_SERVER_HOST}:{PLAYIT_SERVER_PORT}`",
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+
+    try:
+        await interaction.followup.send(
+            f"Status: **{status_label}**\nPlayers: **{player_text}**\nPlayers online: {player_list}\nHost: `{PLAYIT_SERVER_HOST}:{PLAYIT_SERVER_PORT}`",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except (discord.NotFound, discord.HTTPException):
+        pass
 
 
 async def show_member_count(interaction: discord.Interaction) -> None:
