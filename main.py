@@ -117,35 +117,27 @@ def read_varint(sock: socket.socket) -> int:
             raise ValueError("VarInt is too large")
 
 
-def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None]:
+async def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None]:
     try:
         host, port = try_srv(host, port)
-        with socket.create_connection((host, port), timeout=SERVER_STATUS_TIMEOUT_SECONDS) as sock:
-            sock.settimeout(SERVER_STATUS_TIMEOUT_SECONDS)
-            address = host.encode("utf-8")
-            handshake = b""
-            handshake += pack_varint(0)
-            handshake += pack_varint(47)
-            handshake += pack_varint(len(address)) + address
-            handshake += struct.pack(">H", port)
-            handshake += pack_varint(1)
-            sock.sendall(pack_varint(len(handshake)) + handshake)
-            sock.sendall(pack_varint(1) + b"\x00")
-
-            packet_length = read_varint(sock)
-            packet_id = read_varint(sock)
-            if packet_id != 0:
-                return False, 0
-
-            json_length = read_varint(sock)
-            payload = sock.recv(json_length)
-            if len(payload) != json_length:
-                return False, 0
-            data = json.loads(payload.decode("utf-8"))
-            player_count = int(data.get("players", {}).get("online", 0) or 0)
-            return True, player_count
-    except (OSError, ValueError, json.JSONDecodeError, socket.timeout):
+        target = host if port == 25565 else f"{host}:{port}"
+        url = f"https://api.mcstatus.io/v2/status/java/{target}"
+        timeout = aiohttp.ClientTimeout(total=SERVER_STATUS_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": USER_AGENT}) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return False, 0
+                data = await resp.json(content_type=None)
+    except (aiohttp.ClientError, TimeoutError, ValueError, json.JSONDecodeError):
         return False, 0
+
+    if not isinstance(data, dict) or not data.get("online"):
+        return False, 0
+
+    players = data.get("players", {}).get("online")
+    if players is None:
+        return True, 0
+    return True, int(players)
 
 
 async def notify_admins_server_status(is_online: bool, players_online: int | None, maintenance_mode: bool) -> None:
@@ -704,7 +696,7 @@ async def server_status(interaction: discord.Interaction):
     await interaction.response.defer()
 
     state = load_server_state()
-    online, players = ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
+    online, players = await ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
     maintenance_mode = bool(state.get("maintenance", False))
     state["online"] = online
     state["players"] = players or 0
