@@ -1,9 +1,17 @@
 import os
 import json
-import discord
+import socket
+import struct
+
 import aiohttp
+import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+
+try:
+    import dns
+except ImportError:  # pragma: no cover - optional dependency for SRV lookups
+    dns = None
 
 # ── Configuration ──────────────────────────────────────────────
 TOKEN = os.environ["DISCORD_BOT_TOKEN"]
@@ -35,11 +43,13 @@ intents.reactions = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 def try_srv(host: str, port: int) -> tuple[str, int]:
+    if dns is None:
+        return host, port
     try:
         answers = dns.resolver.resolve(f"_minecraft._tcp.{host}", "SRV")
         for rdata in answers:
             return str(rdata.target), rdata.port
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
+    except (AttributeError, dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
         pass
     return host, port
 
@@ -188,6 +198,35 @@ async def require_admin(interaction: discord.Interaction) -> bool:
         return False
 
     return True
+
+
+async def safe_defer_interaction(interaction: discord.Interaction, *, ephemeral: bool = False) -> None:
+    try:
+        await interaction.response.defer(ephemeral=ephemeral)
+    except discord.InteractionResponded:
+        pass
+
+
+async def safe_send_interaction_message(
+    interaction: discord.Interaction,
+    content: str | None = None,
+    *,
+    embed: discord.Embed | None = None,
+    allowed_mentions: discord.AllowedMentions | None = None,
+    ephemeral: bool = False,
+) -> None:
+    kwargs: dict[str, object] = {"ephemeral": ephemeral}
+    if content is not None:
+        kwargs["content"] = content
+    if embed is not None:
+        kwargs["embed"] = embed
+    if allowed_mentions is not None:
+        kwargs["allowed_mentions"] = allowed_mentions
+
+    try:
+        await interaction.response.send_message(**kwargs)
+    except discord.InteractionResponded:
+        await interaction.followup.send(**kwargs)
 
 
 @bot.event
@@ -644,7 +683,7 @@ async def members(interaction: discord.Interaction):
     if interaction.guild is None:
         await interaction.response.send_message(
             "This command can only be used in a server.",
-            ephemeral=True
+            ephemeral=True,
         )
         return
 
@@ -683,12 +722,22 @@ async def server_maintenance(interaction: discord.Interaction, enabled: str):
     state["maintenance"] = enabled == "on"
     save_server_state(state)
 
-    online = bool(state.get("online"))
-    players = state.get("players", 0)
     await safe_send_interaction_message(
         interaction,
         f"✅ Maintenance mode is now **{'enabled' if state['maintenance'] else 'disabled'}**.",
         ephemeral=True,
+    )
+
+
+@bot.tree.command(name="server-info", description="Show the server member count")
+async def server_info(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "This command can only be used in a server.",
+            ephemeral=True,
+        )
+        return
+
     await interaction.response.send_message(
         f"This server has **{interaction.guild.member_count:,}** members."
     )
