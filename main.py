@@ -24,6 +24,9 @@ CHECKMARK_EMOJIS = {"✅", "✔", "☑"}
 PLAYIT_SERVER_HOST = os.environ.get("PLAYIT_SERVER_HOST", "kubabin.dev")
 PLAYIT_SERVER_PORT = int(os.environ.get("PLAYIT_SERVER_PORT", "25565"))
 SERVER_STATUS_TIMEOUT_SECONDS = 3
+SERVER_STATUS_POLL_SECONDS = 30
+STATUS_VOICE_CHANNEL_ID = 1526969043783909548
+PLAYER_COUNT_VOICE_CHANNEL_ID = 1526969052491157626
 SERVER_STATUS_FILE = "server_status.json"
 
 # ── Modpack update watcher config ──────────────────────────────
@@ -117,7 +120,7 @@ def read_varint(sock: socket.socket) -> int:
             raise ValueError("VarInt is too large")
 
 
-async def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None]:
+async def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None, list[str]]:
     try:
         host, port = try_srv(host, port)
         target = host if port == 25565 else f"{host}:{port}"
@@ -126,18 +129,54 @@ async def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None]
         async with aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": USER_AGENT}) as session:
             async with session.get(url) as resp:
                 if resp.status != 200:
-                    return False, 0
+                    return False, 0, []
                 data = await resp.json(content_type=None)
     except (aiohttp.ClientError, TimeoutError, ValueError, json.JSONDecodeError):
-        return False, 0
+        return False, 0, []
 
     if not isinstance(data, dict) or not data.get("online"):
-        return False, 0
+        return False, 0, []
 
-    players = data.get("players", {}).get("online")
-    if players is None:
-        return True, 0
-    return True, int(players)
+    players = data.get("players", {})
+    online_players = int(players.get("online", 0) or 0)
+    names = players.get("list") or []
+    if not isinstance(names, list):
+        names = []
+    names = [str(name) for name in names if isinstance(name, (str, int))]
+    return True, online_players, names
+
+
+async def update_server_status_channels(status: str, players: int) -> None:
+    status_channel = bot.get_channel(STATUS_VOICE_CHANNEL_ID)
+    if status_channel is None:
+        try:
+            status_channel = await bot.fetch_channel(STATUS_VOICE_CHANNEL_ID)
+        except discord.HTTPException:
+            status_channel = None
+
+    players_channel = bot.get_channel(PLAYER_COUNT_VOICE_CHANNEL_ID)
+    if players_channel is None:
+        try:
+            players_channel = await bot.fetch_channel(PLAYER_COUNT_VOICE_CHANNEL_ID)
+        except discord.HTTPException:
+            players_channel = None
+
+    if isinstance(status_channel, discord.VoiceChannel):
+        await status_channel.edit(name=f"Status: {status}")
+    if isinstance(players_channel, discord.VoiceChannel):
+        await players_channel.edit(name=f"Players: {players}")
+
+
+@tasks.loop(seconds=SERVER_STATUS_POLL_SECONDS)
+async def update_server_status_loop():
+    online, players_count, player_names = await ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
+    status_text = "Online" if online else "Offline"
+    await update_server_status_channels(status_text, players_count)
+
+    state = load_server_state()
+    state["online"] = online
+    state["players"] = players_count or 0
+    save_server_state(state)
 
 
 async def notify_admins_server_status(is_online: bool, players_online: int | None, maintenance_mode: bool) -> None:
@@ -246,6 +285,8 @@ async def on_ready():
 
     if not check_modpack_updates.is_running():
         check_modpack_updates.start()
+    if not update_server_status_loop.is_running():
+        update_server_status_loop.start()
 
 
 # ── Modpack update watcher ─────────────────────────────────────
@@ -326,6 +367,11 @@ async def check_modpack_updates():
 
 @check_modpack_updates.before_loop
 async def before_check_modpack_updates():
+    await bot.wait_until_ready()
+
+
+@update_server_status_loop.before_loop
+async def before_update_server_status_loop():
     await bot.wait_until_ready()
 
 
@@ -696,7 +742,7 @@ async def server_status(interaction: discord.Interaction):
     await interaction.response.defer()
 
     state = load_server_state()
-    online, players = await ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
+    online, players, player_names = await ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
     maintenance_mode = bool(state.get("maintenance", False))
     state["online"] = online
     state["players"] = players or 0
@@ -705,8 +751,10 @@ async def server_status(interaction: discord.Interaction):
 
     status_label = "Maintenance" if maintenance_mode else ("Online" if online else "Offline")
     player_text = "Maintenance" if maintenance_mode else (str(players) if online and players is not None else "Offline")
+    player_list = ", ".join(player_names) if player_names else "No players online"
+    await update_server_status_channels(status_label, players or 0)
     await interaction.followup.send(
-        f"Status: **{status_label}**\nPlayers: **{player_text}**\nHost: `{PLAYIT_SERVER_HOST}:{PLAYIT_SERVER_PORT}`",
+        f"Status: **{status_label}**\nPlayers: **{player_text}**\nPlayers online: {player_list}\nHost: `{PLAYIT_SERVER_HOST}:{PLAYIT_SERVER_PORT}`",
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
