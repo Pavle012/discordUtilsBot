@@ -13,6 +13,10 @@ ADMIN_ROLE_ID = 1492838235209076846
 MODERATOR_ONLY_CHANNEL_ID = 1492865328261234841
 CHECKMARK_EMOJIS = {"✅", "✔", "☑"}
 
+PLAYIT_SERVER_HOST = os.environ.get("PLAYIT_SERVER_HOST", "kubabin.dev")
+PLAYIT_SERVER_PORT = int(os.environ.get("PLAYIT_SERVER_PORT", "25565"))
+SERVER_STATUS_FILE = "server_status.json"
+
 # ── Modpack update watcher config ──────────────────────────────
 MODRINTH_PROJECT_SLUG = "assembly-line-smp"
 MODRINTH_API_URL = f"https://api.modrinth.com/v2/project/{MODRINTH_PROJECT_SLUG}/version"
@@ -29,6 +33,136 @@ intents.presences = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+def try_srv(host: str, port: int) -> tuple[str, int]:
+    try:
+        answers = dns.resolver.resolve(f"_minecraft._tcp.{host}", "SRV")
+        for rdata in answers:
+            return str(rdata.target), rdata.port
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
+        pass
+    return host, port
+
+
+def load_server_state() -> dict:
+    if not os.path.exists(SERVER_STATUS_FILE):
+        return {"online": None, "players": 0, "maintenance": False}
+    try:
+        with open(SERVER_STATUS_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+            if isinstance(data, dict):
+                return {
+                    "online": data.get("online"),
+                    "players": int(data.get("players", 0) or 0),
+                    "maintenance": bool(data.get("maintenance", False)),
+                }
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        pass
+    return {"online": None, "players": 0, "maintenance": False}
+
+
+def save_server_state(state: dict) -> None:
+    with open(SERVER_STATUS_FILE, "w", encoding="utf-8") as file:
+        json.dump(state, file, indent=2)
+        file.write("\n")
+
+
+def pack_varint(value: int) -> bytes:
+    data = bytearray()
+    while True:
+        temp = value & 0x7F
+        value >>= 7
+        if value != 0:
+            data.append(temp | 0x80)
+        else:
+            data.append(temp)
+            break
+    return bytes(data)
+
+
+def read_varint(sock: socket.socket) -> int:
+    value = 0
+    position = 0
+    while True:
+        chunk = sock.recv(1)
+        if not chunk:
+            raise OSError("Connection closed while reading VarInt")
+        byte = chunk[0]
+        value |= (byte & 0x7F) << position
+        if (byte & 0x80) == 0:
+            return value
+        position += 7
+        if position > 35:
+            raise ValueError("VarInt is too large")
+
+
+def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None]:
+    try:
+        host, port = try_srv(host, port)
+        with socket.create_connection((host, port), timeout=10) as sock:
+            sock.settimeout(10)
+            address = host.encode("utf-8")
+            handshake = b""
+            handshake += pack_varint(0)
+            handshake += pack_varint(47)
+            handshake += pack_varint(len(address)) + address
+            handshake += struct.pack(">H", port)
+            handshake += pack_varint(1)
+            sock.sendall(pack_varint(len(handshake)) + handshake)
+            sock.sendall(pack_varint(1) + b"\x00")
+
+            packet_length = read_varint(sock)
+            packet_id = read_varint(sock)
+            if packet_id != 0:
+                return False, 0
+
+            json_length = read_varint(sock)
+            payload = sock.recv(json_length)
+            if len(payload) != json_length:
+                return False, 0
+            data = json.loads(payload.decode("utf-8"))
+            player_count = int(data.get("players", {}).get("online", 0) or 0)
+            return True, player_count
+    except (OSError, ValueError, json.JSONDecodeError, socket.timeout):
+        return False, 0
+
+
+async def notify_admins_server_status(is_online: bool, players_online: int | None, maintenance_mode: bool) -> None:
+    if is_online:
+        title = "Server back online"
+        description = "The Minecraft server is back online."
+        color = discord.Color.green()
+    else:
+        title = "Minecraft server offline"
+        description = "The Minecraft server is currently offline and may need attention."
+        color = discord.Color.red()
+
+    if maintenance_mode:
+        description = f"{description} Maintenance mode is currently enabled."
+
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=color,
+        timestamp=discord.utils.utcnow(),
+    )
+    if players_online is not None:
+        embed.add_field(name="Players online", value=str(players_online), inline=True)
+    embed.add_field(name="Status", value="Maintenance" if maintenance_mode else ("Online" if is_online else "Offline"), inline=True)
+
+    channel = bot.get_channel(MODERATOR_ONLY_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(MODERATOR_ONLY_CHANNEL_ID)
+        except discord.HTTPException:
+            return
+
+    if isinstance(channel, (discord.TextChannel, discord.Thread)):
+        await channel.send(
+            f"<@&{ADMIN_ROLE_ID}>",
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions.all(),
+        )
 
 
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -514,6 +648,47 @@ async def members(interaction: discord.Interaction):
         )
         return
 
+    state = load_server_state()
+    online, players = ping_minecraft_server(PLAYIT_SERVER_HOST, PLAYIT_SERVER_PORT)
+    maintenance_mode = bool(state.get("maintenance", False))
+    state["online"] = online
+    state["players"] = players or 0
+    state["maintenance"] = maintenance_mode
+    save_server_state(state)
+
+    status_label = "Maintenance" if maintenance_mode else ("Online" if online else "Offline")
+    player_text = "Maintenance" if maintenance_mode else (str(players) if online and players is not None else "Offline")
+    await safe_send_interaction_message(
+        interaction,
+        f"Status: **{status_label}**\nPlayers: **{player_text}**\nHost: `{PLAYIT_SERVER_HOST}:{PLAYIT_SERVER_PORT}`",
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+@bot.tree.command(name="server-maintenance", description="Toggle maintenance mode for the Minecraft server status")
+@app_commands.describe(enabled="Turn maintenance mode on or off")
+@app_commands.choices(
+    enabled=[
+        app_commands.Choice(name="On", value="on"),
+        app_commands.Choice(name="Off", value="off"),
+    ]
+)
+async def server_maintenance(interaction: discord.Interaction, enabled: str):
+    await safe_defer_interaction(interaction, ephemeral=True)
+
+    if not await require_admin(interaction):
+        return
+
+    state = load_server_state()
+    state["maintenance"] = enabled == "on"
+    save_server_state(state)
+
+    online = bool(state.get("online"))
+    players = state.get("players", 0)
+    await safe_send_interaction_message(
+        interaction,
+        f"✅ Maintenance mode is now **{'enabled' if state['maintenance'] else 'disabled'}**.",
+        ephemeral=True,
     await interaction.response.send_message(
         f"This server has **{interaction.guild.member_count:,}** members."
     )
