@@ -45,11 +45,21 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def try_srv(host: str, port: int) -> tuple[str, int]:
     if dns is None:
         return host, port
+
+    resolver_mod = getattr(dns, "resolver", None)
+    exception_mod = getattr(dns, "exception", None)
+    if resolver_mod is None or not hasattr(resolver_mod, "resolve"):
+        return host, port
+
+    no_answer = getattr(resolver_mod, "NoAnswer", Exception)
+    nx_domain = getattr(resolver_mod, "NXDOMAIN", Exception)
+    dns_exception = getattr(exception_mod, "DNSException", Exception)
+
     try:
-        answers = dns.resolver.resolve(f"_minecraft._tcp.{host}", "SRV")
+        answers = resolver_mod.resolve(f"_minecraft._tcp.{host}", "SRV")
         for rdata in answers:
             return str(rdata.target), rdata.port
-    except (AttributeError, dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.DNSException):
+    except (no_answer, nx_domain, dns_exception):
         pass
     return host, port
 
