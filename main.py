@@ -1,12 +1,9 @@
 import os
 import json
-import struct
-import socket
 import discord
 import aiohttp
 from discord import app_commands
 from discord.ext import commands, tasks
-import dns.resolver
 
 # ── Configuration ──────────────────────────────────────────────
 TOKEN = os.environ["DISCORD_BOT_TOKEN"]
@@ -191,53 +188,6 @@ async def require_admin(interaction: discord.Interaction) -> bool:
         return False
 
     return True
-
-
-async def safe_defer_interaction(
-    interaction: discord.Interaction,
-    *,
-    ephemeral: bool = False,
-) -> None:
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=ephemeral)
-    except (discord.HTTPException, discord.NotFound, RuntimeError):
-        pass
-
-
-async def safe_send_interaction_message(
-    interaction: discord.Interaction,
-    message: str,
-    *,
-    ephemeral: bool = False,
-    embed: discord.Embed | None = None,
-    allowed_mentions: discord.AllowedMentions | None = None,
-) -> None:
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(
-                message,
-                ephemeral=ephemeral,
-                embed=embed,
-                allowed_mentions=allowed_mentions,
-            )
-        else:
-            await interaction.response.send_message(
-                message,
-                ephemeral=ephemeral,
-                embed=embed,
-                allowed_mentions=allowed_mentions,
-            )
-    except (discord.HTTPException, discord.NotFound, RuntimeError):
-        try:
-            await interaction.followup.send(
-                message,
-                ephemeral=ephemeral,
-                embed=embed,
-                allowed_mentions=allowed_mentions,
-            )
-        except Exception:
-            pass
 
 
 @bot.event
@@ -691,31 +641,10 @@ async def gleniro_work(interaction: discord.Interaction):
 
 @bot.tree.command(name="members", description="Show the number of members in this server")
 async def members(interaction: discord.Interaction):
-    await safe_defer_interaction(interaction)
-
     if interaction.guild is None:
-        await safe_send_interaction_message(
-            interaction,
+        await interaction.response.send_message(
             "This command can only be used in a server.",
-            ephemeral=True,
-        )
-        return
-
-    await safe_send_interaction_message(
-        interaction,
-        f"This server has **{interaction.guild.member_count:,}** members.",
-    )
-
-
-@bot.tree.command(name="server-status", description="Check the current Minecraft server status and player count")
-async def server_status(interaction: discord.Interaction):
-    await safe_defer_interaction(interaction)
-
-    if interaction.guild is None:
-        await safe_send_interaction_message(
-            interaction,
-            "This command can only be used in a server.",
-            ephemeral=True,
+            ephemeral=True
         )
         return
 
@@ -760,6 +689,8 @@ async def server_maintenance(interaction: discord.Interaction, enabled: str):
         interaction,
         f"✅ Maintenance mode is now **{'enabled' if state['maintenance'] else 'disabled'}**.",
         ephemeral=True,
+    await interaction.response.send_message(
+        f"This server has **{interaction.guild.member_count:,}** members."
     )
 
 
