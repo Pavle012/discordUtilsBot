@@ -23,6 +23,7 @@ CHECKMARK_EMOJIS = {"✅", "✔", "☑"}
 
 PLAYIT_SERVER_HOST = os.environ.get("PLAYIT_SERVER_HOST", "kubabin.dev")
 PLAYIT_SERVER_PORT = int(os.environ.get("PLAYIT_SERVER_PORT", "25565"))
+SERVER_STATUS_TIMEOUT_SECONDS = 3
 SERVER_STATUS_FILE = "server_status.json"
 
 # ── Modpack update watcher config ──────────────────────────────
@@ -119,8 +120,8 @@ def read_varint(sock: socket.socket) -> int:
 def ping_minecraft_server(host: str, port: int) -> tuple[bool, int | None]:
     try:
         host, port = try_srv(host, port)
-        with socket.create_connection((host, port), timeout=10) as sock:
-            sock.settimeout(10)
+        with socket.create_connection((host, port), timeout=SERVER_STATUS_TIMEOUT_SECONDS) as sock:
+            sock.settimeout(SERVER_STATUS_TIMEOUT_SECONDS)
             address = host.encode("utf-8")
             handshake = b""
             handshake += pack_varint(0)
