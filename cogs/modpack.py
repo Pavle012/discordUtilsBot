@@ -1,49 +1,79 @@
 import asyncio
+import datetime
 import logging
+import time
 
 import aiohttp
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import (
     CHECK_INTERVAL_MINUTES,
     LAST_VERSION_FILE,
+    MODPACK_PING_ROLE_ID,
     MODPACK_UPDATE_CHANNEL_ID,
     MODRINTH_API_URL,
     MODRINTH_PROJECT_SLUG,
 )
+from errors import report_error
 from storage import JsonStore
 from utils import get_channel
 
 log = logging.getLogger("assembly_bot.modpack")
+CACHE_SECONDS = 60
 
 
-def build_update_embed(version: dict) -> discord.Embed:
+def version_url(version: dict) -> str:
+    return f"https://modrinth.com/modpack/{MODRINTH_PROJECT_SLUG}/version/{version['id']}"
+
+
+def build_version_embed(version: dict, heading: str) -> discord.Embed:
     changelog = version.get("changelog") or "No changelog provided."
     if len(changelog) > 1000:
         changelog = changelog[:1000] + "…"
 
     game_versions = ", ".join(version.get("game_versions", [])) or "Unknown"
     loaders = ", ".join(version.get("loaders", [])) or "Unknown"
-    version_url = f"https://modrinth.com/modpack/{MODRINTH_PROJECT_SLUG}/version/{version['id']}"
 
     embed = discord.Embed(
-        title=f"📦 New modpack update: {version.get('name', version.get('version_number', 'Unknown'))}",
-        url=version_url,
+        title=f"📦 {heading}: {version.get('name', version.get('version_number', 'Unknown'))}"[:256],
+        url=version_url(version),
         description=changelog,
         color=discord.Color.green(),
     )
     embed.add_field(name="Version number", value=version.get("version_number", "N/A"), inline=True)
-    embed.add_field(name="Game versions", value=game_versions, inline=True)
-    embed.add_field(name="Loaders", value=loaders, inline=True)
+    embed.add_field(name="Game versions", value=game_versions[:1024], inline=True)
+    embed.add_field(name="Loaders", value=loaders[:1024], inline=True)
+
+    published = version.get("date_published")
+    if isinstance(published, str):
+        try:
+            ts = datetime.datetime.fromisoformat(published.replace("Z", "+00:00"))
+            embed.add_field(name="Released", value=f"<t:{int(ts.timestamp())}:R>", inline=True)
+        except ValueError:
+            pass
     embed.set_footer(text=MODRINTH_PROJECT_SLUG)
     return embed
+
+
+def build_links_view(version: dict) -> discord.ui.View:
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(style=discord.ButtonStyle.link, label="Version page", url=version_url(version)))
+    files = version.get("files") or []
+    if files:
+        primary = next((f for f in files if f.get("primary")), files[0])
+        url = primary.get("url")
+        if isinstance(url, str) and url.startswith("https://"):
+            view.add_item(discord.ui.Button(style=discord.ButtonStyle.link, label="Download", url=url))
+    return view
 
 
 class Modpack(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.store = JsonStore(LAST_VERSION_FILE, lambda: {"last_version_id": None})
+        self._cache: tuple[float, list] | None = None
 
     async def cog_load(self) -> None:
         self.check_updates.start()
@@ -51,30 +81,44 @@ class Modpack(commands.Cog):
     async def cog_unload(self) -> None:
         self.check_updates.cancel()
 
+    async def _fetch_versions(self, ttl: float = 0) -> list | None:
+        """Newest-first version list from Modrinth, or None if it couldn't be fetched."""
+        now = time.monotonic()
+        if ttl and self._cache and now - self._cache[0] < ttl:
+            return self._cache[1]
+
+        session = self.bot.http_session  # type: ignore[attr-defined]
+        try:
+            async with session.get(MODRINTH_API_URL) as resp:
+                if resp.status != 200:
+                    log.warning("Modrinth API returned status %s", resp.status)
+                    return None
+                versions = await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            log.warning("Error fetching Modrinth versions: %s", e)
+            return None
+
+        if not isinstance(versions, list):
+            return None
+        self._cache = (now, versions)
+        return versions
+
+    # ── Update watcher ─────────────────────────────────────────
     @tasks.loop(minutes=CHECK_INTERVAL_MINUTES)
     async def check_updates(self) -> None:
         try:
             await self._check()
-        except Exception:  # an unhandled error would stop the loop for good
+        except Exception as e:  # an unhandled error would stop the loop for good
             log.exception("Modpack update check failed")
+            await report_error(self.bot, "Modpack update check", e)
 
     @check_updates.before_loop
     async def _before_check(self) -> None:
         await self.bot.wait_until_ready()
 
     async def _check(self) -> None:
-        session = self.bot.http_session  # type: ignore[attr-defined]
-        try:
-            async with session.get(MODRINTH_API_URL) as resp:
-                if resp.status != 200:
-                    log.warning("Modrinth API returned status %s", resp.status)
-                    return
-                versions = await resp.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
-            log.warning("Error fetching Modrinth versions: %s", e)
-            return
-
-        if not isinstance(versions, list) or not versions:
+        versions = await self._fetch_versions()
+        if not versions:
             return
 
         # Modrinth returns versions newest-first
@@ -96,14 +140,38 @@ class Modpack(commands.Cog):
             log.warning("Could not find channel with ID %s", MODPACK_UPDATE_CHANNEL_ID)
             return
 
+        ping = MODPACK_PING_ROLE_ID != 0
         try:
-            await channel.send(embed=build_update_embed(latest))
+            await channel.send(
+                f"<@&{MODPACK_PING_ROLE_ID}>" if ping else None,
+                embed=build_version_embed(latest, "New modpack update"),
+                view=build_links_view(latest),
+                allowed_mentions=(
+                    discord.AllowedMentions(roles=[discord.Object(id=MODPACK_PING_ROLE_ID)])
+                    if ping
+                    else discord.AllowedMentions.none()
+                ),
+            )
         except discord.HTTPException:
             log.exception("Could not post the modpack update; will retry next check")
             return
 
         self.store.data["last_version_id"] = latest_id
         await self.store.save()
+
+    # ── /modpack-latest ────────────────────────────────────────
+    @app_commands.command(name="modpack-latest", description="Show the newest modpack version")
+    async def modpack_latest(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        versions = await self._fetch_versions(ttl=CACHE_SECONDS)
+        if not versions:
+            await interaction.followup.send("I couldn't get the latest version from Modrinth. Try again later.")
+            return
+        latest = versions[0]
+        await interaction.followup.send(
+            embed=build_version_embed(latest, "Latest modpack version"),
+            view=build_links_view(latest),
+        )
 
 
 async def setup(bot: commands.Bot) -> None:

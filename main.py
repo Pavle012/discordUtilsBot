@@ -1,4 +1,5 @@
 import logging
+import sys
 
 import aiohttp
 import discord
@@ -6,6 +7,8 @@ from discord import app_commands
 from discord.ext import commands
 
 from config import TOKEN, USER_AGENT
+from errors import report_error
+from utils import respond
 
 log = logging.getLogger("assembly_bot")
 
@@ -15,17 +18,8 @@ EXTENSIONS = (
     "cogs.modpack",
     "cogs.forum",
     "cogs.explain",
+    "cogs.ops",
 )
-
-
-async def respond(interaction: discord.Interaction, text: str) -> None:
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(text, ephemeral=True)
-        else:
-            await interaction.response.send_message(text, ephemeral=True)
-    except discord.HTTPException:
-        pass
 
 
 async def on_tree_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
@@ -40,6 +34,7 @@ async def on_tree_error(interaction: discord.Interaction, error: app_commands.Ap
     else:
         name = interaction.command.qualified_name if interaction.command else "?"
         log.error("Unhandled error in /%s", name, exc_info=error)
+        await report_error(interaction.client, f"/{name}", getattr(error, "original", error))
         message = "Something went wrong while running that command. Please try again later."
     await respond(interaction, message)
 
@@ -51,6 +46,7 @@ class AssemblyBot(commands.Bot):
         intents.presences = True  # /admins shows online status
         super().__init__(command_prefix="!", intents=intents)
         self.http_session: aiohttp.ClientSession | None = None
+        self.started_at = discord.utils.utcnow()
 
     async def setup_hook(self) -> None:
         self.http_session = aiohttp.ClientSession(
@@ -72,6 +68,12 @@ class AssemblyBot(commands.Bot):
         await super().close()  # unloads cogs (cancels their loops) first
         if self.http_session is not None:
             await self.http_session.close()
+
+    async def on_error(self, event_method: str, *args, **kwargs) -> None:
+        error = sys.exc_info()[1]
+        log.exception("Unhandled exception in %s", event_method)
+        if error is not None:
+            await report_error(self, f"event {event_method}", error)
 
     async def on_ready(self) -> None:
         log.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "?")

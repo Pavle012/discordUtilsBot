@@ -13,6 +13,16 @@ async def get_channel(bot: commands.Bot, channel_id: int):
     return channel
 
 
+async def respond(interaction: discord.Interaction, text: str) -> None:
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(text, ephemeral=True)
+        else:
+            await interaction.response.send_message(text, ephemeral=True)
+    except discord.HTTPException:
+        pass
+
+
 def escape(text: str) -> str:
     return discord.utils.escape_markdown(discord.utils.escape_mentions(text))
 
