@@ -26,7 +26,7 @@ CHECKMARK_EMOJIS = {"✅", "✔", "☑"}
 PLAYIT_SERVER_HOST = os.environ.get("PLAYIT_SERVER_HOST", "season3.kubabin.dev")
 PLAYIT_SERVER_PORT = int(os.environ.get("PLAYIT_SERVER_PORT", "25565"))
 SERVER_STATUS_TIMEOUT_SECONDS = 5
-SERVER_STATUS_POLL_SECONDS = 30
+SERVER_STATUS_POLL_SECONDS = 300
 # Discord allows ~2 channel renames per 10 minutes, so renames are throttled per channel.
 STATUS_CHANNEL_MIN_INTERVAL_SECONDS = 300
 # Consecutive failed pings needed before the server counts as offline (avoids flapping alerts).
