@@ -4,3 +4,6 @@ last_modpack_version.json
 __pycache__/*
 server_status.json
 explanations.json
+forum_state.json
+help_points.json
+cogs/__pycache__/*
