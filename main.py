@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import sys
 
@@ -79,5 +80,26 @@ class AssemblyBot(commands.Bot):
         log.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "?")
 
 
+async def run_bot() -> None:
+    bot = AssemblyBot()
+    retry_delay = 5
+    try:
+        while True:
+            try:
+                await bot.start(TOKEN)
+                break
+            except aiohttp.ClientConnectorError as error:
+                log.warning(
+                    "Could not connect to Discord (%s); retrying in %s seconds",
+                    error,
+                    retry_delay,
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 60)
+    finally:
+        await bot.close()
+
+
 if __name__ == "__main__":
-    AssemblyBot().run(TOKEN, log_level=logging.INFO)
+    discord.utils.setup_logging(level=logging.INFO)
+    asyncio.run(run_bot())
