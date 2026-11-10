@@ -170,7 +170,7 @@ class Status(commands.Cog):
         )
 
         # Admins are pinged only when the server goes down (never when it comes back up).
-        ping = (not is_online) and (not maintenance)
+        ping = False
         channel = await get_channel(self.bot, MODERATOR_ONLY_CHANNEL_ID)
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
             return
