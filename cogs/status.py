@@ -7,9 +7,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import (
-    ADMIN_ROLE_ID,
     FAILS_BEFORE_OFFLINE,
-    MODERATOR_ONLY_CHANNEL_ID,
     PLAYER_COUNT_VOICE_CHANNEL_ID,
     PLAYIT_SERVER_HOST,
     PLAYIT_SERVER_PORT,
@@ -117,9 +115,6 @@ class Status(commands.Cog):
 
         await self._update_channels()
 
-        if previous is not None and confirmed != previous:
-            await self._notify_admins(confirmed, players)
-
     # ── Voice channel names ────────────────────────────────────
     async def _rename(self, channel_id: int, new_name: str) -> None:
         channel = await get_channel(self.bot, channel_id)
@@ -145,47 +140,6 @@ class Status(commands.Cog):
         state = self.store.data
         await self._rename(STATUS_VOICE_CHANNEL_ID, f"Status: {status_label(state)}")
         await self._rename(PLAYER_COUNT_VOICE_CHANNEL_ID, f"Players: {state['players']}")
-
-    # ── Admin alerts ───────────────────────────────────────────
-    async def _notify_admins(self, is_online: bool, players: int) -> None:
-        maintenance = self.store.data["maintenance"]
-        if is_online:
-            title, color = "Server back online", discord.Color.green()
-            description = "The Minecraft server is back online."
-        else:
-            title, color = "Minecraft server offline", discord.Color.red()
-            description = "The Minecraft server is currently offline and may need attention."
-            if maintenance:
-                description += " Maintenance mode is currently enabled, so admins were not pinged."
-
-        embed = discord.Embed(
-            title=title, description=description, color=color, timestamp=discord.utils.utcnow()
-        )
-        if is_online:
-            embed.add_field(name="Players online", value=str(players), inline=True)
-        embed.add_field(
-            name="Status",
-            value="Maintenance" if maintenance else ("Online" if is_online else "Offline"),
-            inline=True,
-        )
-
-        # Admins are pinged only when the server goes down (never when it comes back up).
-        ping = False
-        channel = await get_channel(self.bot, MODERATOR_ONLY_CHANNEL_ID)
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            return
-        try:
-            await channel.send(
-                f"<@&{ADMIN_ROLE_ID}>" if ping else None,
-                embed=embed,
-                allowed_mentions=(
-                    discord.AllowedMentions(roles=[discord.Object(id=ADMIN_ROLE_ID)])
-                    if ping
-                    else discord.AllowedMentions.none()
-                ),
-            )
-        except discord.HTTPException:
-            log.exception("Could not send the server status alert")
 
     # ── Commands ───────────────────────────────────────────────
     @app_commands.command(name="server-status", description="Show the Minecraft server status")
