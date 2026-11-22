@@ -59,6 +59,11 @@ SUGGESTIONS_API_URL = os.environ.get(
 )
 SUGGESTIONS_CHECK_INTERVAL_MINUTES = int(os.environ.get("SUGGESTIONS_CHECK_INTERVAL_MINUTES", "10"))
 LAST_SUGGESTION_ACTIVITY_FILE = "last_suggestion_activity.json"
+SUGGESTIONS_API_BASE = os.environ.get(
+    "SUGGESTIONS_API_BASE",
+    "https://raspi.kubabin.dev/suggest/api",
+)
+SUGGESTIONS_BOT_TOKEN = os.environ.get("SUGGESTIONS_BOT_TOKEN", "")
 
 # ── Misc ───────────────────────────────────────────────────────
 EXPLANATIONS_FILE = "explanations.json"
