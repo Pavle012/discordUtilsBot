@@ -51,6 +51,15 @@ LAST_VERSION_FILE = "last_modpack_version.json"
 # Optional role to ping on modpack updates (0 = don't ping anyone).
 MODPACK_PING_ROLE_ID = _int_env("MODPACK_PING_ROLE_ID", 0)
 
+# ── Suggestion activity watcher ─────────────────────────────────
+SUGGESTIONS_ACTIVITY_CHANNEL_ID = _int_env("SUGGESTIONS_ACTIVITY_CHANNEL_ID", 0)
+SUGGESTIONS_API_URL = os.environ.get(
+    "SUGGESTIONS_API_URL",
+    "https://raspi.kubabin.dev/suggest/api/recent-activity",
+)
+SUGGESTIONS_CHECK_INTERVAL_MINUTES = int(os.environ.get("SUGGESTIONS_CHECK_INTERVAL_MINUTES", "10"))
+LAST_SUGGESTION_ACTIVITY_FILE = "last_suggestion_activity.json"
+
 # ── Misc ───────────────────────────────────────────────────────
 EXPLANATIONS_FILE = "explanations.json"
 BACKUP_DIR = "backups"
@@ -61,5 +70,6 @@ DATA_FILES = (
     EXPLANATIONS_FILE,
     HELP_POINTS_FILE,
     FORUM_STATE_FILE,
+    LAST_SUGGESTION_ACTIVITY_FILE,
 )
 USER_AGENT = "Pavle012/assembly-line-smp-discord-bot (contact: via GitHub)"

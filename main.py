@@ -20,6 +20,7 @@ EXTENSIONS = (
     "cogs.forum",
     "cogs.explain",
     "cogs.ops",
+    "cogs.suggestions",
 )
 
 
