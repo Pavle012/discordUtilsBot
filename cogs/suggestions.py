@@ -78,7 +78,7 @@ class Suggestions(commands.Cog):
                 embed = discord.Embed(
                     title="Mod suggestion update",
                     description=description,
-                    url=f"https://kubabin.dev/suggest/suggestion.html?id={item['suggestion_id']}",
+                    url=f"https://kubabin.dev/suggest/{item.get('slug') or item['suggestion_id']}",
                     color=(
                         discord.Color.red()
                         if item["status"] == "rejected"
@@ -90,7 +90,7 @@ class Suggestions(commands.Cog):
                 embed = discord.Embed(
                     title="New suggestion comment",
                     description=f"**{item['title']}**\n{body[:1000]}",
-                    url=f"https://kubabin.dev/suggest/suggestion.html?id={item['suggestion_id']}",
+                    url=f"https://kubabin.dev/suggest/{item.get('slug') or item['suggestion_id']}",
                     color=discord.Color.blurple(),
                 )
             await channel.send(embed=embed)
