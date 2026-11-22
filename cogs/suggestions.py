@@ -11,7 +11,6 @@ from config import (
     SUGGESTIONS_ACTIVITY_CHANNEL_ID,
     SUGGESTIONS_API_BASE,
     SUGGESTIONS_API_URL,
-    SUGGESTIONS_BOT_TOKEN,
     SUGGESTIONS_CHECK_INTERVAL_MINUTES,
 )
 from errors import report_error
@@ -215,14 +214,9 @@ class Suggestions(commands.Cog):
         if not item:
             await interaction.followup.send("Suggestion not found.", ephemeral=True)
             return
-        if not SUGGESTIONS_BOT_TOKEN:
-            await interaction.followup.send("Suggestion bot voting is not configured.", ephemeral=True)
-            return
         session = self.bot.http_session  # type: ignore[attr-defined]
-        headers = {"Authorization": f"Bearer {SUGGESTIONS_BOT_TOKEN}"}
         async with session.delete(
             f"{SUGGESTIONS_API_BASE}/bot/vote",
-            headers=headers,
             json={"discord_id": str(interaction.user.id), "slug": item["modrinth_slug"]},
         ) as response:
             if response.status != 200:
@@ -242,14 +236,9 @@ class Suggestions(commands.Cog):
         direction: str,
         reason: str,
     ) -> None:
-        if not SUGGESTIONS_BOT_TOKEN:
-            await interaction.followup.send("Suggestion bot voting is not configured.", ephemeral=True)
-            return
         session = self.bot.http_session  # type: ignore[attr-defined]
-        headers = {"Authorization": f"Bearer {SUGGESTIONS_BOT_TOKEN}"}
         async with session.post(
             f"{SUGGESTIONS_API_BASE}/bot/vote",
-            headers=headers,
             json={
                 "discord_id": str(interaction.user.id),
                 "slug": slug,

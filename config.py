@@ -63,7 +63,6 @@ SUGGESTIONS_API_BASE = os.environ.get(
     "SUGGESTIONS_API_BASE",
     "https://raspi.kubabin.dev/suggest/api",
 )
-SUGGESTIONS_BOT_TOKEN = os.environ.get("SUGGESTIONS_BOT_TOKEN", "")
 
 # ── Misc ───────────────────────────────────────────────────────
 EXPLANATIONS_FILE = "explanations.json"
