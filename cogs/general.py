@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 import discord
 from discord import app_commands
@@ -11,6 +12,12 @@ from storage import JsonStore
 from utils import get_channel, respond
 
 log = logging.getLogger("assembly_bot.general")
+
+
+def private_chat_channel_name(member: discord.Member) -> str:
+    username = re.sub(r"[^a-z0-9_-]+", "-", member.name.lower()).strip("-")
+    username = username[:70].strip("-") or "member"
+    return f"admin-chat-{username}"
 
 
 def get_admin_status(member: discord.Member) -> tuple[str, str]:
@@ -290,7 +297,7 @@ class General(commands.Cog):
                     manage_channels=True,
                 )
 
-            name = f"admin-chat-{user.id}"
+            name = private_chat_channel_name(user)
             try:
                 channel = await guild.create_text_channel(
                     name=name,
@@ -336,6 +343,103 @@ class General(commands.Cog):
                 f"✅ Your permanent private chat has been created: {channel.mention}",
                 ephemeral=True,
             )
+
+    @app_commands.command(
+        name="admin-chat-invite",
+        description="Invite someone to this private admin chat",
+    )
+    @app_commands.guild_only()
+    @app_commands.describe(member="The person to invite")
+    async def admin_chat_invite(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+    ):
+        guild = interaction.guild
+        invoker = interaction.user
+        channel = interaction.channel
+        if (
+            guild is None
+            or not isinstance(invoker, discord.Member)
+            or not isinstance(channel, discord.TextChannel)
+        ):
+            await interaction.response.send_message(
+                "This command can only be used inside a server private admin chat.",
+                ephemeral=True,
+            )
+            return
+
+        guild_chats = self.private_chats.data.setdefault("chats", {}).get(str(guild.id), {})
+        owner_id = next(
+            (
+                user_id
+                for user_id, channel_id in guild_chats.items()
+                if channel_id == str(channel.id)
+            ),
+            None,
+        )
+        if owner_id is None:
+            await interaction.response.send_message(
+                "This command can only be used inside a private admin chat.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            owner_snowflake = int(owner_id)
+        except (TypeError, ValueError):
+            await interaction.response.send_message(
+                "I couldn't identify the owner of this private admin chat.",
+                ephemeral=True,
+            )
+            return
+
+        is_owner = invoker.id == owner_snowflake
+        is_admin = invoker.guild_permissions.administrator
+        if not (is_owner or is_admin):
+            await interaction.response.send_message(
+                "Only the chat owner or an administrator can invite people.",
+                ephemeral=True,
+            )
+            return
+
+        if member.id == invoker.id:
+            await interaction.response.send_message(
+                "You already have access to this chat.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await channel.set_permissions(
+                member,
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                reason=f"Invited to private admin chat by {invoker} ({invoker.id})",
+            )
+            await channel.send(
+                f"👋 {member.mention} was invited to this private admin chat by {invoker.mention}.",
+                allowed_mentions=discord.AllowedMentions(users=[member, invoker]),
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I don't have permission to update this chat's permissions.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "I couldn't invite that member. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            f"✅ {member.mention} was invited to {channel.mention}.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions(users=[member]),
+        )
 
     @app_commands.command(name="gleniro_work", description="Joke command")
     async def gleniro_work(self, interaction: discord.Interaction):
