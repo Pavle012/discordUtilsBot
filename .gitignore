@@ -7,3 +7,4 @@ explanations.json
 forum_state.json
 help_points.json
 cogs/__pycache__/*
+private_chats.json

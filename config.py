@@ -26,6 +26,7 @@ CHECKMARK_EMOJIS = {"✅", "✔", "☑"}
 HELP_POINTS_FORUM_ID = _int_env("HELP_POINTS_FORUM_ID", 1512129703878590625)
 HELP_POINTS_FILE = "help_points.json"
 FORUM_STATE_FILE = "forum_state.json"
+PRIVATE_CHATS_FILE = "private_chats.json"
 
 # Posts left "waiting for OP": DM a reminder, then close automatically.
 STALE_CHECK_MINUTES = 30
@@ -74,6 +75,7 @@ DATA_FILES = (
     EXPLANATIONS_FILE,
     HELP_POINTS_FILE,
     FORUM_STATE_FILE,
+    PRIVATE_CHATS_FILE,
     LAST_SUGGESTION_ACTIVITY_FILE,
 )
 USER_AGENT = "Pavle012/assembly-line-smp-discord-bot (contact: via GitHub)"

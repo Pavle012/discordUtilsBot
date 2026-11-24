@@ -1,11 +1,13 @@
+import asyncio
 import logging
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import ADMIN_ROLE_ID, MODERATOR_ONLY_CHANNEL_ID
+from config import ADMIN_ROLE_ID, MODERATOR_ONLY_CHANNEL_ID, PRIVATE_CHATS_FILE
 from errors import report_error
+from storage import JsonStore
 from utils import get_channel, respond
 
 log = logging.getLogger("assembly_bot.general")
@@ -105,6 +107,11 @@ class BugReportView(discord.ui.View):
 class General(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self.private_chats = JsonStore(
+            PRIVATE_CHATS_FILE,
+            default=lambda: {"chats": {}},
+        )
+        self._private_chat_lock = asyncio.Lock()
 
     async def cog_load(self) -> None:
         self.bot.add_view(BugReportView())  # keep old report buttons working after restarts
@@ -194,6 +201,141 @@ class General(commands.Cog):
         await interaction.response.send_message(
             "✅ Your bug report was sent to the server administrators.", ephemeral=True
         )
+
+    @app_commands.command(
+        name="admin-chat",
+        description="Create your permanent private chat with the server administrators",
+    )
+    @app_commands.guild_only()
+    async def admin_chat(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        user = interaction.user
+        if guild is None or not isinstance(user, discord.Member):
+            await interaction.response.send_message(
+                "This command can only be used by a server member.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        async with self._private_chat_lock:
+            guild_chats = self.private_chats.data.setdefault("chats", {}).setdefault(str(guild.id), {})
+            existing_id = guild_chats.get(str(user.id))
+            if existing_id:
+                try:
+                    channel_id = int(existing_id)
+                except (TypeError, ValueError):
+                    channel = None
+                else:
+                    channel = guild.get_channel(channel_id)
+                    if channel is None:
+                        channel = await get_channel(self.bot, channel_id)
+                if (
+                    isinstance(channel, discord.TextChannel)
+                    and channel.guild.id == guild.id
+                ):
+                    await interaction.followup.send(
+                        f"Your private admin chat already exists: {channel.mention}",
+                        ephemeral=True,
+                    )
+                    return
+                guild_chats.pop(str(user.id), None)
+
+            admin_role = guild.get_role(ADMIN_ROLE_ID)
+            if admin_role is None:
+                await interaction.followup.send(
+                    "I couldn't find the configured Admins role. Please try again later.",
+                    ephemeral=True,
+                )
+                return
+
+            moderator_channel = await get_channel(self.bot, MODERATOR_ONLY_CHANNEL_ID)
+            category = (
+                moderator_channel.category
+                if isinstance(moderator_channel, discord.TextChannel)
+                else None
+            )
+
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(
+                    view_channel=False,
+                    send_messages=False,
+                    read_message_history=False,
+                ),
+                admin_role: discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
+                ),
+                user: discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
+                ),
+            }
+            for role in guild.roles:
+                if role in (guild.default_role, admin_role):
+                    continue
+                overwrites[role] = discord.PermissionOverwrite(
+                    view_channel=False,
+                    send_messages=False,
+                    read_message_history=False,
+                )
+            if guild.me:
+                overwrites[guild.me] = discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
+                    manage_channels=True,
+                )
+
+            name = f"admin-chat-{user.id}"
+            try:
+                channel = await guild.create_text_channel(
+                    name=name,
+                    category=category,
+                    topic=f"Private admin chat for {user.display_name} ({user.id})",
+                    overwrites=overwrites,
+                    reason=f"Permanent private admin chat created by {user} ({user.id})",
+                )
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "I don't have permission to create your private admin chat.",
+                    ephemeral=True,
+                )
+                return
+            except discord.HTTPException:
+                await interaction.followup.send(
+                    "I couldn't create your private admin chat. Please try again later.",
+                    ephemeral=True,
+                )
+                return
+
+            guild_chats[str(user.id)] = str(channel.id)
+            await self.private_chats.save()
+
+            embed = discord.Embed(
+                title="Private chat with the admins",
+                description=(
+                    f"{user.mention}, this channel is private to you and the server administrators.\n"
+                    "It will not be removed automatically."
+                ),
+                color=discord.Color.blurple(),
+                timestamp=discord.utils.utcnow(),
+            )
+            try:
+                await channel.send(
+                    embed=embed,
+                    allowed_mentions=discord.AllowedMentions(users=[user], roles=[admin_role]),
+                )
+            except discord.HTTPException:
+                log.warning("Could not send the welcome message in private chat %s", channel.id)
+
+            await interaction.followup.send(
+                f"✅ Your permanent private chat has been created: {channel.mention}",
+                ephemeral=True,
+            )
 
     @app_commands.command(name="gleniro_work", description="Joke command")
     async def gleniro_work(self, interaction: discord.Interaction):
